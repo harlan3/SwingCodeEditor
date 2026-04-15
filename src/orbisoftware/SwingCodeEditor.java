@@ -30,6 +30,7 @@ public class SwingCodeEditor extends JFrame {
     private JTabbedPane rightTabbedPane;
 
     private JTabbedPane activeTabbedPane;   // Tracks which side has the cursor
+    private boolean wordWrapEnabled = false;
 
     private Map<Component, File> tabToFile = new HashMap<>();
     private Map<Component, String> tabToSyntax = new HashMap<>();
@@ -47,6 +48,7 @@ public class SwingCodeEditor extends JFrame {
     private JMenuItem pasteMenuItem;
     private JMenuItem selectAllMenuItem;
 
+    private JLabel caretStatusLabel;
     private File lastDirectory;
 
     public SwingCodeEditor() {
@@ -72,30 +74,32 @@ public class SwingCodeEditor extends JFrame {
 
         setupCursorTracking();
 
+        caretStatusLabel = new JLabel("Line 1, Column 1");
         setJMenuBar(createMenuBar());
-        
-        if (softRenderMenuBar)
-        	setContentPane(createRenderablePanel());
-        else
-        	setContentPane(mainSplitPane);
+        setContentPane(createRenderablePanel());
         
         // Initial tabs
         addNewTab(leftTabbedPane, "Untitled-Left", "", SyntaxConstants.SYNTAX_STYLE_JAVA);
         addNewTab(rightTabbedPane, "Untitled-Right", "", SyntaxConstants.SYNTAX_STYLE_JAVA);
 
-        SwingUtilities.invokeLater(this::updateEditMenuState);
+        SwingUtilities.invokeLater(() -> {
+            updateEditMenuState();
+            updateCaretStatus();
+        });
     }
     
     public JPanel createRenderablePanel() {
-    	
-        JPanel renderPanel = new JPanel(new BorderLayout());
+    	JPanel renderPanel = new JPanel(new BorderLayout());
 
-        JMenuBar menuBar = getJMenuBar();
-        if (menuBar != null) {
-            renderPanel.add(menuBar, BorderLayout.NORTH);
+        if (softRenderMenuBar) {
+            JMenuBar menuBar = getJMenuBar();
+            if (menuBar != null) {
+                renderPanel.add(menuBar, BorderLayout.NORTH);
+            }
         }
 
         renderPanel.add(mainSplitPane, BorderLayout.CENTER);
+        renderPanel.add(createStatusBar(), BorderLayout.SOUTH);
 
         renderPanel.setPreferredSize(new Dimension(appWidth, appHeight));
         renderPanel.setSize(appWidth, appHeight);
@@ -103,6 +107,41 @@ public class SwingCodeEditor extends JFrame {
         renderPanel.doLayout();
 
         return renderPanel;
+    }
+
+    private JPanel createStatusBar() {
+        JPanel statusBar = new JPanel(new BorderLayout());
+        statusBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Color.LIGHT_GRAY));
+
+        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        leftPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        caretStatusLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
+        caretStatusLabel.setPreferredSize(new Dimension(130, 20));
+        leftPanel.add(caretStatusLabel);
+
+        statusBar.add(leftPanel, BorderLayout.WEST);
+        return statusBar;
+    }
+
+    private void updateCaretStatus() {
+        if (caretStatusLabel == null) {
+            return;
+        }
+
+        RSyntaxTextArea textArea = getCurrentTextArea();
+        if (textArea == null) {
+            caretStatusLabel.setText("Line -, Column -");
+            return;
+        }
+
+        int caretPosition = textArea.getCaretPosition();
+        try {
+            int line = textArea.getLineOfOffset(caretPosition) + 1;
+            int column = caretPosition - textArea.getLineStartOffset(line - 1) + 1;
+            caretStatusLabel.setText("Line " + line + ", Column " + column);
+        } catch (Exception ex) {
+            caretStatusLabel.setText("Line -, Column -");
+        }
     }
 
     /**
@@ -148,6 +187,7 @@ public class SwingCodeEditor extends JFrame {
                     activeTabbedPane = rightTabbedPane;
                 }
                 updateEditMenuState();
+                updateCaretStatus();
             }
         };
 
@@ -159,15 +199,18 @@ public class SwingCodeEditor extends JFrame {
         leftTabbedPane.addChangeListener(e -> {
             activeTabbedPane = leftTabbedPane;
             updateEditMenuState();
+            updateCaretStatus();
         });
         rightTabbedPane.addChangeListener(e -> {
             activeTabbedPane = rightTabbedPane;
             updateEditMenuState();
+            updateCaretStatus();
         });
     }
 
     private void addNewTab(JTabbedPane tabbedPane, String title, String content, String syntaxStyle) {
         RSyntaxTextArea textArea = createTextArea(syntaxStyle);
+        applyWordWrap(textArea, wordWrapEnabled);
         textArea.setText(content);
         textArea.setCaretPosition(0);
         installUndoRedo(textArea);
@@ -210,6 +253,7 @@ public class SwingCodeEditor extends JFrame {
             textArea.requestFocusInWindow();
             activeTabbedPane = tabbedPane;
             updateEditMenuState();
+            updateCaretStatus();
         });
     }
 
@@ -221,6 +265,7 @@ public class SwingCodeEditor extends JFrame {
         textArea.setFont(new Font("Consolas", Font.PLAIN, 14));
         textArea.setTabsEmulated(true);
         textArea.setTabSize(4);
+        applyWordWrap(textArea, wordWrapEnabled);
         return textArea;
     }
 
@@ -245,10 +290,14 @@ public class SwingCodeEditor extends JFrame {
                     activeTabbedPane = rightTabbedPane;
                 }
                 updateEditMenuState();
+                updateCaretStatus();
             }
         });
 
-        textArea.addCaretListener(e -> updateEditMenuState());
+        textArea.addCaretListener(e -> {
+            updateEditMenuState();
+            updateCaretStatus();
+        });
     }
 
     private void installDirtyTracking(Component tabComponent, RSyntaxTextArea textArea, JTabbedPane tabbedPane) {
@@ -486,6 +535,13 @@ public class SwingCodeEditor extends JFrame {
         splitItem.addActionListener(e -> toggleSplitView(splitItem.isSelected()));
         viewMenu.add(splitItem);
 
+        JCheckBoxMenuItem wordWrapItem = new JCheckBoxMenuItem("Enable Word Wrap", wordWrapEnabled);
+        wordWrapItem.addActionListener(e -> {
+            wordWrapEnabled = wordWrapItem.isSelected();
+            applyWordWrapToAllTabs();
+        });
+        viewMenu.add(wordWrapItem);
+
         JMenu themeMenu = new JMenu("Themes");
         int buttonIndex = 0;
         addThemeItem("Default", buttonIndex++, "default.xml", themeButtonGroup, themeMenu);
@@ -545,6 +601,65 @@ public class SwingCodeEditor extends JFrame {
             mainSplitPane.setRightComponent(null);
         }
         mainSplitPane.revalidate();
+    }
+
+    private void applyWordWrap(RSyntaxTextArea textArea, boolean enabled) {
+        if (textArea == null) {
+            return;
+        }
+        textArea.setLineWrap(enabled);
+        textArea.setWrapStyleWord(enabled);
+    }
+
+    private void applyWordWrapToAllTabs() {
+        applyWordWrapToPane(leftTabbedPane);
+        applyWordWrapToPane(rightTabbedPane);
+        revalidate();
+        repaint();
+    }
+
+    private void applyWordWrapToPane(JTabbedPane pane) {
+        for (int i = 0; i < pane.getTabCount(); i++) {
+            Component comp = pane.getComponentAt(i);
+            if (comp instanceof RTextScrollPane) {
+                RSyntaxTextArea textArea = (RSyntaxTextArea) ((RTextScrollPane) comp).getTextArea();
+                applyWordWrap(textArea, wordWrapEnabled);
+            }
+        }
+    }
+
+    private void moveTabToOppositeSide(JTabbedPane sourcePane, Component tab) {
+        if (sourcePane == null || tab == null) {
+            return;
+        }
+
+        int sourceIndex = sourcePane.indexOfComponent(tab);
+        if (sourceIndex < 0) {
+            return;
+        }
+
+        JTabbedPane targetPane = sourcePane == leftTabbedPane ? rightTabbedPane : leftTabbedPane;
+        String title = sourcePane.getTitleAt(sourceIndex);
+
+        sourcePane.remove(tab);
+        targetPane.addTab(title, tab);
+
+        int targetIndex = targetPane.indexOfComponent(tab);
+        targetPane.setTabComponentAt(targetIndex, new TabHeader(title, tab, targetPane, this));
+        targetPane.setSelectedComponent(tab);
+
+        activeTabbedPane = targetPane;
+        updateTabTitle(tab);
+
+        SwingUtilities.invokeLater(() -> {
+            RSyntaxTextArea textArea = tab instanceof RTextScrollPane
+                    ? (RSyntaxTextArea) ((RTextScrollPane) tab).getTextArea()
+                    : null;
+            if (textArea != null) {
+                textArea.requestFocusInWindow();
+            }
+            updateEditMenuState();
+        });
     }
 
     private void addLanguageItem(JMenu menu, String name, String style) {
@@ -806,6 +921,7 @@ public class SwingCodeEditor extends JFrame {
         tabToDirty.remove(tab);
         pane.remove(tab);
         updateEditMenuState();
+        updateCaretStatus();
     }
 
     private static class TabHeader extends JPanel {
@@ -814,13 +930,52 @@ public class SwingCodeEditor extends JFrame {
         public TabHeader(String title, Component tab, JTabbedPane pane, SwingCodeEditor editorFrame) {
             setOpaque(false);
             setLayout(new FlowLayout(FlowLayout.CENTER, 5, 0));
+
             titleLabel = new JLabel(title);
             add(titleLabel);
+
             JButton closeBtn = new JButton("×");
             closeBtn.setMargin(new Insets(0, 2, 0, 2));
             closeBtn.setFocusable(false);
             closeBtn.addActionListener(e -> editorFrame.removeTab(pane, tab));
             add(closeBtn);
+
+            MouseAdapter popupHandler = new MouseAdapter() {
+                private void maybeShowPopup(MouseEvent e) {
+                    if (!e.isPopupTrigger()) {
+                        return;
+                    }
+
+                    int index = pane.indexOfComponent(tab);
+                    if (index < 0) {
+                        return;
+                    }
+
+                    pane.setSelectedIndex(index);
+                    editorFrame.activeTabbedPane = pane;
+                    editorFrame.updateEditMenuState();
+
+                    String targetSide = pane == editorFrame.leftTabbedPane ? "Right" : "Left";
+                    JPopupMenu popupMenu = new JPopupMenu();
+                    JMenuItem moveItem = new JMenuItem("Move to " + targetSide);
+                    moveItem.addActionListener(ev -> editorFrame.moveTabToOppositeSide(pane, tab));
+                    popupMenu.add(moveItem);
+                    popupMenu.show(e.getComponent(), e.getX(), e.getY());
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    maybeShowPopup(e);
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    maybeShowPopup(e);
+                }
+            };
+
+            addMouseListener(popupHandler);
+            titleLabel.addMouseListener(popupHandler);
         }
 
         public void setTitle(String title) {
